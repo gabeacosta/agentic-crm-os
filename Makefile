@@ -1,99 +1,37 @@
-# =============================================================================
-# GenticOS - Makefile
-# Production orchestrator for the GenticOS platform
-# =============================================================================
+# Agentic CRM OS — schema + lead state machine reference implementation
+# Real targets only: this repo is Postgres + SQL, no app server to build/deploy.
 
-.PHONY: up down logs health backup restore kill certs migrate seed build restart ps clean deploy
+.PHONY: up down psql migrate test clean
 
-# Default service for targeted commands
-svc ?=
-file ?=
-token ?=
+PGUSER ?= postgres
+PGDB ?= agentic_crm_os
+COMPOSE = docker compose
 
-# ---------------------------------------------------------------------------
-# Lifecycle
-# ---------------------------------------------------------------------------
-
-## Start all services in detached mode
+## Start Postgres
 up:
-	docker compose up -d
+	$(COMPOSE) up -d
+	@echo "Waiting for Postgres..."
+	@until $(COMPOSE) exec -T postgres pg_isready -U $(PGUSER) >/dev/null 2>&1; do sleep 1; done
 
-## Stop all services
+## Stop Postgres
 down:
-	docker compose down
+	$(COMPOSE) down
 
-## Build all images (or specific service)
-build:
-	docker compose build $(svc)
+## Open a psql shell against the running database
+psql:
+	$(COMPOSE) exec postgres psql -U $(PGUSER) -d $(PGDB)
 
-## Restart a service (or all)
-restart:
-	docker compose restart $(svc)
-
-## Show running containers
-ps:
-	docker compose ps
-
-## Tail logs (optionally for a specific service: make logs svc=control-plane)
-logs:
-	docker compose logs -f $(svc)
-
-## Stop all services and DESTROY volumes (with confirmation)
-clean:
-	@echo "WARNING: This will destroy all data volumes (postgres, redis, minio, grafana)."
-	@read -p "Are you sure? Type 'yes' to confirm: " confirm && \
-	if [ "$$confirm" = "yes" ]; then \
-		docker compose down -v; \
-		echo "All volumes destroyed."; \
-	else \
-		echo "Aborted."; \
-	fi
-
-# ---------------------------------------------------------------------------
-# Operations
-# ---------------------------------------------------------------------------
-
-## Check control-plane health
-health:
-	@curl -sf http://localhost:4100/health | jq . || echo "Control plane unreachable"
-
-## Run database migrations
+## Apply all migrations in order (idempotent only if DB is fresh)
 migrate:
-	docker compose exec control-plane node dist/db/migrate.js
+	@for f in migrations/*.sql; do \
+		echo "-- $$f"; \
+		$(COMPOSE) exec -T postgres psql -U $(PGUSER) -d $(PGDB) -v ON_ERROR_STOP=1 < $$f || exit 1; \
+	done
 
-## Seed the database
-seed:
-	docker compose exec control-plane node dist/db/seed.js
+## Run the fn_transition_lead() test suite against the running database
+test:
+	$(COMPOSE) exec -T postgres psql -U $(PGUSER) -d $(PGDB) -v ON_ERROR_STOP=1 < tests/test_state_machine.sql
 
-## Activate global kill switch
-kill:
-	@if [ -z "$(token)" ]; then echo "Usage: make kill token=<jwt>"; exit 1; fi
-	curl -X POST http://localhost:4100/api/v1/kill-switch \
-		-H "Content-Type: application/json" \
-		-H "Authorization: Bearer $(token)" \
-		-d '{"scope":"global","active":true}' | jq .
-
-## Generate mTLS certificates
-certs:
-	./certs/generate-mtls.sh
-
-# ---------------------------------------------------------------------------
-# Backup & Restore
-# ---------------------------------------------------------------------------
-
-## Full backup (postgres + redis + minio)
-backup:
-	./scripts/backup.sh
-
-## Restore from backup archive: make restore file=path/to/backup.tar.gz
-restore:
-	@if [ -z "$(file)" ]; then echo "Usage: make restore file=<path/to/backup.tar.gz>"; exit 1; fi
-	./scripts/restore.sh $(file)
-
-# ---------------------------------------------------------------------------
-# Deployment
-# ---------------------------------------------------------------------------
-
-## Deploy to production VPS
-deploy:
-	./scripts/deploy.sh
+## Stop Postgres and destroy the data volume
+clean:
+	$(COMPOSE) down -v
