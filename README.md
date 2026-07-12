@@ -4,13 +4,13 @@
 
 A multi-tenant lead lifecycle schema for PostgreSQL, plus `fn_transition_lead()` — a state-machine function that uses `SELECT ... FOR UPDATE` row locking so concurrent callers transitioning the same lead serialize instead of racing.
 
-**What this is**: 13 SQL migrations (schema) + one PL/pgSQL function (state machine) + a test suite that proves the locking behavior. No application server, no API layer — this is the data-layer pattern extracted from a production real-estate lead pipeline, not the pipeline itself.
+**What this is**: 13 SQL migrations (schema) + one PL/pgSQL function (state machine) + a test suite that checks the transition rules and audit-trail writes. No application server, no API layer — this is the data-layer pattern extracted from a production real-estate lead pipeline, not the pipeline itself.
 
 ## The problem `fn_transition_lead()` solves
 
 Two events can race to transition the same lead — a voicemail-drop webhook and a live-call-ended webhook both firing for the same lead within milliseconds, for example. Without a lock, both read the same starting status, both validate against it, and the second write silently clobbers the first (a lost update). `fn_transition_lead()` takes the row lock with `FOR UPDATE` *before* validating the transition, so the second caller blocks until the first commits, then re-validates against the post-commit state — not the stale state it started with.
 
-This is demonstrated, not just asserted: `tests/test_state_machine.sql` includes a concurrency case where two transactions race on one lead; the losing transaction correctly sees the winner's committed status and is rejected if that makes its own transition illegal.
+The lock itself is real and inspectable — see the `FOR UPDATE` clause in `migrations/013_lead_state_machine.sql`. `tests/test_state_machine.sql` currently exercises the sequential cases (valid/illegal/same-status transitions, plus the `events`/`audit_log` writes) against a single connection; it does not yet include an automated two-connection race test proving the lock serializes concurrent callers. That test is still on the list, not shipped.
 
 ## Schema
 
@@ -43,7 +43,7 @@ Legal transitions live in `lead_status_transitions` (a data table, not a hardcod
 ```bash
 make up        # start Postgres
 make migrate   # apply all 13 migrations
-make test      # run the state-machine test suite (includes the concurrency case)
+make test      # run the state-machine test suite (sequential transition + audit-trail checks)
 make psql      # open a shell to poke around
 make clean     # tear down + destroy the volume
 ```
@@ -52,7 +52,7 @@ make clean     # tear down + destroy the volume
 
 - No API server — pick your own framework; the schema and function are framework-agnostic.
 - `migrations/012_seed_data.sql` uses fictional data (`Acme Realty`, `John Smith`, `example.com`) — replace before real use.
-- No production usage numbers are claimed here. This is the pattern; production numbers live in the [portfolio case studies](https://github.com/genticai0910-png/ai-portfolio/blob/main/CASE_STUDIES.md) where they're backed by receipts.
+- No production usage numbers are claimed here. This is the pattern; production numbers live in the [portfolio case studies](https://github.com/gabeacosta/ai-portfolio/blob/main/CASE_STUDIES.md) where they're backed by receipts.
 
 ---
-Part of the [AI Infrastructure Portfolio](https://github.com/genticai0910-png/ai-portfolio)
+Part of the [AI Infrastructure Portfolio](https://github.com/gabeacosta/ai-portfolio)
