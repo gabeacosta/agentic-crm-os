@@ -55,4 +55,4 @@ make clean     # tear down + destroy the volume
 - No production usage numbers are claimed here. This is the pattern; production numbers live in the [portfolio case studies](https://github.com/gabeacosta/ai-portfolio/blob/main/CASE_STUDIES.md) where they're backed by receipts.
 
 ---
-Part of the [AI Infrastructure Portfolio](https://github.com/gabeacosta/ai-portfolio)
+Part of the [Forward Deployed Engineering portfolio](https://github.com/gabeacosta/ai-portfolio)
